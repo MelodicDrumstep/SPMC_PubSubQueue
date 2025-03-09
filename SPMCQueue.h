@@ -23,12 +23,15 @@ SOFTWARE.
 */
 #pragma once
 #include <atomic>
+#include <array>
 
+// It's a simple SPMC PubSubQueue for fixed type
 template<class T, uint32_t CNT>
 class SPMCQueue
 {
 public:
   static_assert(CNT && !(CNT & (CNT - 1)), "CNT must be a power of 2");
+  // For optimizing (x % CNT) to (x & (CNT - 1))
   struct Reader
   {
     operator bool() const { return q; }
@@ -36,6 +39,7 @@ public:
       auto& blk = q->blks[next_idx % CNT];
       uint32_t new_idx = ((std::atomic<uint32_t>*)&blk.idx)->load(std::memory_order_acquire);
       if (int(new_idx - next_idx) < 0) return nullptr;
+      // Invalid block
       next_idx = new_idx + 1;
       return &blk.data;
     }
@@ -62,6 +66,7 @@ public:
     auto& blk = blks[++write_idx % CNT];
     writer(blk.data);
     ((std::atomic<uint32_t>*)&blk.idx)->store(write_idx, std::memory_order_release);
+    // Use atomic store here to ensure safety
   }
 
 private:
@@ -70,7 +75,12 @@ private:
   {
     uint32_t idx = 0;
     T data;
-  } blks[CNT];
+    // Containing a index inside each block, in this way
+    // avoiding sharing the write index between the producer thread
+    // and the consumer threads
+  }; 
+  std::array<Block, CNT> blks;
 
   alignas(128) uint32_t write_idx = 0;
+  // the producer will not be affected by the consumer
 };
